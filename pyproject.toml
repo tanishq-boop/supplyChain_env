@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "supply-chain-env"
+version = "1.0.0"
+description = "A supply chain routing environment with dynamic disruptions."
+dependencies = [
+    "gymnasium",
+    "numpy",
+    "openai",
+    "fastapi",
+    "uvicorn",
+    "openenv-core>=0.2.0"
+]
+
+[project.scripts]
+server = "server.app:main"
