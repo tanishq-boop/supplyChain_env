@@ -15,9 +15,11 @@ MAX_TOKENS = 10
 def log_start(task_id: str, model: str) -> None:
     print(f"[START] task_id={task_id} model={model}", flush=True)
 
-def log_step(step: int, action: str, reward: float, done: bool) -> None:
+def log_step(step: int, action: str, reward: float, info: dict, done: bool) -> None:
     done_val = str(done).lower()
-    print(f"[STEP] step={step} action={action} reward={reward:.2f} done={done_val}", flush=True)
+    step_rew = info.get("step_reward", 0.0)
+    total_cost = info.get("total_path_cost", 0.0)
+    print(f"[STEP] step={step} action={action} reward={reward:.2f} step_reward={step_rew:.2f} total_path_cost={total_cost:.2f} done={done_val}", flush=True)
 
 def log_end(success: bool, steps: int, score: float) -> None:
     print(f"[END] success={str(success).lower()} steps={steps} score={score:.2f}", flush=True)
@@ -49,7 +51,7 @@ def get_model_action(client: OpenAI, step: int, obs: list, env: SupplyChainEnv) 
         valid_neighbors.append({"Node ID": n_idx, "Status": status_str})
     
     system_prompt = (
-        "You are an autonomous supply chain routing AI.\n"
+        "You are an Autonomous Supply Chain Agent. You are evaluated on Safety and Efficiency. Every move consumes resources. Every Crisis node encountered is a critical failure. You have the authority to Delete high-risk nodes if the cost of the detour exceeds the cost of deletion (75 points). Act as a rational economic actor.\n"
         f"You are at Node {current_idx}. Target is {destination_idx}. "
         f"To Move, pick 0 to {N-1}. To Delete a dangerous node, pick {N} to {2*N-1}.\n"
         "Do not output any other text or reasoning."
@@ -109,7 +111,7 @@ def main() -> None:
             rewards.append(float(reward))
             steps_taken = step
 
-            log_step(step=step, action=str(action), reward=reward, done=terminated)
+            log_step(step=step, action=str(action), reward=reward, info=info, done=terminated)
 
             if terminated or truncated:
                 if terminated:

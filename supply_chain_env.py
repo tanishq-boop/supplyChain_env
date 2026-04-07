@@ -25,7 +25,6 @@ class SupplyChainEnv(gym.Env):
 
         self.start_idx = 0
         self.destination_idx = self.num_nodes - 1
-
         self.deleted_nodes = []
 
         if node_states is None and disruption_states is not None:
@@ -35,8 +34,10 @@ class SupplyChainEnv(gym.Env):
             
         self.action_space = spaces.Discrete(2 * self.num_nodes)
         
-        nvec = [self.num_nodes] + [3] * self.num_nodes
+
+        nvec = [self.num_nodes] + [3] * self.num_nodes 
         self.observation_space = spaces.MultiDiscrete(nvec)
+
 
         self.current_idx = self.start_idx
 
@@ -61,9 +62,11 @@ class SupplyChainEnv(gym.Env):
         super().reset(seed=seed)
         self.current_idx = self.start_idx
 
-        # If not explicitly preserved by the ui state runner
         if not hasattr(self, 'preserve_deletions') or not self.preserve_deletions:
             self.deleted_nodes = []
+
+        self.total_path_cost = 0.0
+        self.last_step_reward = 0.0
 
         if options:
             if 'node_states' in options:
@@ -87,12 +90,15 @@ class SupplyChainEnv(gym.Env):
             "current_node": self.idx_to_node[self.current_idx],
             "destination_node": self.idx_to_node[self.destination_idx],
             "node_states": self.node_states.copy(),
-            "deleted_nodes": list(self.deleted_nodes)
+            "deleted_nodes": list(self.deleted_nodes),
+            "step_reward": self.last_step_reward,
+            "total_path_cost": self.total_path_cost
         }
 
     def step(self, action):
         action = int(action)
-        reward = -1.0
+        reward = 0.0
+        time_penalty = 5.0
         terminated = False
         truncated = False
         
@@ -107,7 +113,7 @@ class SupplyChainEnv(gym.Env):
                 if delete_node not in self.deleted_nodes:
                     self.deleted_nodes.append(delete_node)
                     self.node_states[delete_node] = 2
-                    reward -= 5
+                    reward -= 75
                 else:
                     reward -= 10
         else:
@@ -124,22 +130,25 @@ class SupplyChainEnv(gym.Env):
                 if t_status == 2:
                     reward -= 200
                 elif t_status == 1:
-                    reward -= 100
+                    reward -= 250
                     
                 dist_before = self._bfs_distance(self.current_idx, self.destination_idx)
                 
                 travel_cost = connections[target_node]
-                reward -= travel_cost
+                self.total_path_cost += travel_cost
+                reward -= (travel_cost + time_penalty)
+                
                 self.current_idx = target_idx
 
                 dist_after = self._bfs_distance(self.current_idx, self.destination_idx)
                 if dist_after < dist_before:
-                    reward += 15
+                    reward += 30
                 elif dist_after > dist_before:
-                    reward -= 5
+                    reward -= 15
 
                 if target_idx == self.destination_idx:
-                    reward += 500
+                    reward += 1000
                     terminated = True
 
+        self.last_step_reward = float(reward)
         return self._get_obs(), float(reward), terminated, truncated, self._get_info()
