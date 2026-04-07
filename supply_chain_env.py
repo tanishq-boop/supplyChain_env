@@ -26,7 +26,8 @@ class SupplyChainEnv(gym.Env):
         self.start_idx = 0
         self.destination_idx = self.num_nodes - 1
 
-        # Fallback to disruption_states if node_states is not provided, for backwards compatibility
+        self.deleted_nodes = []
+
         if node_states is None and disruption_states is not None:
             self.node_states = disruption_states
         else:
@@ -60,6 +61,10 @@ class SupplyChainEnv(gym.Env):
         super().reset(seed=seed)
         self.current_idx = self.start_idx
 
+        # If not explicitly preserved by the ui state runner
+        if not hasattr(self, 'preserve_deletions') or not self.preserve_deletions:
+            self.deleted_nodes = []
+
         if options:
             if 'node_states' in options:
                 self.node_states = options['node_states']
@@ -73,14 +78,16 @@ class SupplyChainEnv(gym.Env):
     def _get_obs(self):
         obs = [self.current_idx]
         for node in self.nodes:
-            obs.append(self.node_states.get(node, 0))
+            status = 2 if node in self.deleted_nodes else self.node_states.get(node, 0)
+            obs.append(status)
         return np.array(obs, dtype=np.int64)
 
     def _get_info(self):
         return {
             "current_node": self.idx_to_node[self.current_idx],
             "destination_node": self.idx_to_node[self.destination_idx],
-            "node_states": self.node_states.copy()
+            "node_states": self.node_states.copy(),
+            "deleted_nodes": list(self.deleted_nodes)
         }
 
     def step(self, action):
@@ -97,7 +104,8 @@ class SupplyChainEnv(gym.Env):
                 reward -= 50
             else:
                 delete_node = self.idx_to_node[delete_idx]
-                if self.node_states.get(delete_node, 0) != 2:
+                if delete_node not in self.deleted_nodes:
+                    self.deleted_nodes.append(delete_node)
                     self.node_states[delete_node] = 2
                     reward -= 5
                 else:
@@ -112,7 +120,7 @@ class SupplyChainEnv(gym.Env):
             if target_node not in connections:
                 reward -= 50
             else:
-                t_status = self.node_states.get(target_node, 0)
+                t_status = 2 if target_node in self.deleted_nodes else self.node_states.get(target_node, 0)
                 if t_status == 2:
                     reward -= 200
                 elif t_status == 1:

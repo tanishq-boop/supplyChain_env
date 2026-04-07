@@ -26,39 +26,39 @@ def get_model_action(client: OpenAI, step: int, obs: list, env: SupplyChainEnv) 
     current_idx = int(obs[0])
     status_array = obs[1:]
     
-    N = env.num_nodes
+    N = len(env.adjacency_list)
     current_node = env.idx_to_node[current_idx]
-    destination_idx = env.destination_idx
+    destination_idx = N - 1
     
     connections = env.adjacency_list.get(current_node, {})
+    deleted_nodes = env.deleted_nodes
     
     valid_neighbors = []
     for neighbor in connections.keys():
         n_idx = env.node_to_idx[neighbor]
+        
+        # Discovery Constraint: Only append neighbors NOT in deleted_nodes
+        if neighbor in deleted_nodes:
+            continue
+            
         status = status_array[n_idx]
         status_str = "Clear"
         if status == 1:
             status_str = "Disrupted"
-        elif status == 2:
-            status_str = "Deleted"
+            
         valid_neighbors.append({"Node ID": n_idx, "Status": status_str})
     
     system_prompt = (
         "You are an autonomous supply chain routing AI.\n"
-        "Your goal is to reach the Target Node optimally.\n"
-        f"You must reply with EXACTLY ONE INTEGER representing your next action (0 to {2*N - 1}).\n"
+        f"You are at Node {current_idx}. Target is {destination_idx}. "
+        f"To Move, pick 0 to {N-1}. To Delete a dangerous node, pick {N} to {2*N-1}.\n"
         "Do not output any other text or reasoning."
     )
     
-    user_prompt = f"Step: {step}\nCurrent Node ID: {current_idx}\nTarget Node ID: {destination_idx}\n"
-    user_prompt += "Immediate Neighbors of current node:\n"
+    user_prompt = f"Step: {step}\nAvailable Active Neighbors:\n"
     for n in valid_neighbors:
         user_prompt += f"- Node ID: {n['Node ID']} (Status: {n['Status']})\n"
         
-    user_prompt += f"\nAction Space Rules:\n"
-    user_prompt += f"- To MOVE to a Node ID, output precisely that Node ID (0 to {N-1}). Moving to a Disrupted or Deleted node carries a massive penalty.\n"
-    user_prompt += f"- To DELETE node X, choose action {N}+X. You cannot delete Node 0 or Node {destination_idx}.\n"
-    
     user_prompt += "\nOutput your chosen next action integer."
     
     try:

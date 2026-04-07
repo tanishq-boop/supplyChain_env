@@ -17,21 +17,32 @@ if "edges" not in st.session_state:
 if "disruptions" not in st.session_state:
     st.session_state.disruptions = {node: 0 for node in st.session_state.nodes}
 
+if "deleted_nodes" not in st.session_state:
+    st.session_state.deleted_nodes = []
+
 if "last_score" not in st.session_state:
     st.session_state.last_score = 0.0
 
 st.set_page_config(page_title="Supply Chain Optimizer", layout="wide")
 
+env_adj = {node: {} for node in st.session_state.nodes}
+for f, t, c in st.session_state.edges:
+    env_adj[f][t] = c
+    
+env = SupplyChainEnv(adjacency_list=env_adj, disruption_states=st.session_state.disruptions)
+env.deleted_nodes = list(st.session_state.deleted_nodes)
+
 st.title("Two-Layer Supply Chain Optimization 🚚")
-st.markdown("Configure your network, trigger disruptions, and watch the RL agent navigate.")
+st.markdown("Configure your network, trigger disruptions, delete hubs dynamically, and watch the RL agent navigate.")
 
 score_col, node_count_col, edge_count_col = st.columns(3)
 with score_col:
     st.metric("Last Mission Reward", f"{st.session_state.last_score:.2f}")
 with node_count_col:
-    st.metric("Total Hubs", len(st.session_state.nodes))
+    st.metric("Total Hubs (Active)", len([n for n in st.session_state.nodes if n not in st.session_state.deleted_nodes]))
 with edge_count_col:
-    st.metric("Active Routes", len(st.session_state.edges))
+    active_edges = [e for e in st.session_state.edges if e[0] not in st.session_state.deleted_nodes and e[1] not in st.session_state.deleted_nodes]
+    st.metric("Active Routes", len(active_edges))
 
 st.divider()
 
@@ -56,14 +67,31 @@ with st.sidebar:
         if st.button("Add Route") and from_n != to_n:
             st.session_state.edges.append((from_n, to_n, cost_val))
             st.rerun()
+            
+    with st.expander("🗑️ Remove Transit Hub", expanded=False):
+        deletable_nodes = []
+        if len(st.session_state.nodes) > 2:
+            start_node = st.session_state.nodes[0]
+            end_node = st.session_state.nodes[-1]
+            deletable_nodes = [n for n in st.session_state.nodes if n != start_node and n != end_node and n not in st.session_state.deleted_nodes]
+            
+        del_target = st.selectbox("Select Hub to Delete", deletable_nodes) if deletable_nodes else None
+        
+        if st.button("Delete Hub") and del_target:
+            node_idx = st.session_state.nodes.index(del_target)
+            N = len(st.session_state.nodes)
+            env.step(N + node_idx)
+            st.session_state.deleted_nodes = list(env.deleted_nodes)
+            st.rerun()
 
     st.divider()
 
     st.subheader("🔥 Live Disruptions")
     for node in st.session_state.nodes:
-        is_on = bool(st.session_state.disruptions.get(node, 0))
-        check = st.checkbox(f"Crisis at {node}", value=is_on)
-        st.session_state.disruptions[node] = 1 if check else 0
+        if node not in st.session_state.deleted_nodes:
+            is_on = bool(st.session_state.disruptions.get(node, 0))
+            check = st.checkbox(f"Crisis at {node}", value=is_on)
+            st.session_state.disruptions[node] = 1 if check else 0
 
     st.divider()
     
@@ -77,6 +105,8 @@ with col_graph:
     
     visual_nodes = []
     for node in st.session_state.nodes:
+        if node in env.deleted_nodes:
+            continue
         is_hit = st.session_state.disruptions.get(node, 0) == 1
         visual_nodes.append(
             Node(id=node, 
@@ -87,6 +117,8 @@ with col_graph:
 
     visual_edges = []
     for frm, to, cst in st.session_state.edges:
+        if frm in env.deleted_nodes or to in env.deleted_nodes:
+            continue
         visual_edges.append(
             Edge(source=frm, target=to, label=f"Cost: {cst}", color="#A0AEC0")
         )
@@ -96,18 +128,16 @@ with col_graph:
         nodeHighlightBehavior=True, highlightColor="#F7A046"
     )
 
-    agraph(nodes=visual_nodes, edges=visual_edges, config=graph_config)
+    if visual_nodes:
+        agraph(nodes=visual_nodes, edges=visual_edges, config=graph_config)
 
 if run_simulation:
     with col_logs:
         st.subheader("🤖 Simulation Logs")
         
-        env_adj = {node: {} for node in st.session_state.nodes}
-        for f, t, c in st.session_state.edges:
-            env_adj[f][t] = c
-            
-        env = SupplyChainEnv(adjacency_list=env_adj, disruption_states=st.session_state.disruptions)
+        env.preserve_deletions = True
         obs, info = env.reset()
+        env.preserve_deletions = False
         
         total_reward = 0.0
         terminated = False
@@ -124,12 +154,16 @@ if run_simulation:
             total_reward += reward
             new_node = step_info['current_node']
             
-            # If the intended action node differs but the state didn't change, the move was invalid
-            if new_node == curr_node and action != env.current_idx:
-                st.write(f"🚫 **Step {step}**: Blocked (No path to {env.idx_to_node[action]})")
+            N = env.num_nodes
+            if action >= N:
+                act_node = env.idx_to_node.get(action - N, "Unknown")
+                st.write(f"🗑️ **Step {step}**: Agent randomly attempted to Delete {act_node}")
             else:
-                icon = "⚠️" if st.session_state.disruptions[new_node] else "🚛"
-                st.write(f"{icon} **Step {step}**: {curr_node} ➔ {new_node}")
+                if new_node == curr_node and action != env.current_idx:
+                    st.write(f"🚫 **Step {step}**: Blocked (No path to {env.idx_to_node.get(action, 'Unknown')})")
+                else:
+                    icon = "⚠️" if st.session_state.disruptions.get(new_node, 0) else "🚛"
+                    st.write(f"{icon} **Step {step}**: {curr_node} ➔ {new_node}")
 
             if terminated:
                 st.success(f"🏁 Goal Reached in {step} steps!")
@@ -140,4 +174,5 @@ if run_simulation:
             st.warning("⏳ Timeout: Goal not reached.")
             
         st.session_state.last_score = total_reward
-        st.button("Update Scoreboard")
+        if st.button("Update Scoreboard"):
+            st.rerun()
