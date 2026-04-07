@@ -14,7 +14,7 @@ BASELINE_GRAPH = {
 class SupplyChainEnv(gym.Env):
     metadata = {"render_modes": ["console"]}
 
-    def __init__(self, adjacency_list=None, disruption_states=None):
+    def __init__(self, adjacency_list=None, node_states=None, disruption_states=None):
         super().__init__()
 
         self.adjacency_list = adjacency_list or BASELINE_GRAPH
@@ -26,15 +26,20 @@ class SupplyChainEnv(gym.Env):
         self.start_idx = 0
         self.destination_idx = self.num_nodes - 1
 
-        self.disruption_states = disruption_states or {n: 0 for n in self.nodes}
-        self.action_space = spaces.Discrete(self.num_nodes)
-        nvec = [self.num_nodes] + [2] * self.num_nodes
+        # Fallback to disruption_states if node_states is not provided, for backwards compatibility
+        if node_states is None and disruption_states is not None:
+            self.node_states = disruption_states
+        else:
+            self.node_states = node_states or {n: 0 for n in self.nodes}
+            
+        self.action_space = spaces.Discrete(2 * self.num_nodes)
+        
+        nvec = [self.num_nodes] + [3] * self.num_nodes
         self.observation_space = spaces.MultiDiscrete(nvec)
 
         self.current_idx = self.start_idx
 
     def _bfs_distance(self, from_idx: int, to_idx: int) -> int:
-        """BFS hop-count distance ignoring disruptions, used for reward shaping."""
         if from_idx == to_idx:
             return 0
         visited = {from_idx}
@@ -56,8 +61,10 @@ class SupplyChainEnv(gym.Env):
         self.current_idx = self.start_idx
 
         if options:
-            if 'disruption_states' in options:
-                self.disruption_states = options['disruption_states']
+            if 'node_states' in options:
+                self.node_states = options['node_states']
+            elif 'disruption_states' in options:
+                self.node_states = options['disruption_states']
             if 'start_node' in options:
                 self.current_idx = self.node_to_idx.get(options['start_node'], 0)
 
@@ -66,50 +73,65 @@ class SupplyChainEnv(gym.Env):
     def _get_obs(self):
         obs = [self.current_idx]
         for node in self.nodes:
-            obs.append(self.disruption_states.get(node, 0))
+            obs.append(self.node_states.get(node, 0))
         return np.array(obs, dtype=np.int64)
 
     def _get_info(self):
         return {
             "current_node": self.idx_to_node[self.current_idx],
-            "destination_node": self.idx_to_node[self.destination_idx]
+            "destination_node": self.idx_to_node[self.destination_idx],
+            "node_states": self.node_states.copy()
         }
 
     def step(self, action):
-        target_idx = int(action)
-        current_node = self.idx_to_node[self.current_idx]
-        target_node = self.idx_to_node.get(target_idx, "Unknown")
-
+        action = int(action)
         reward = -1.0
         terminated = False
         truncated = False
-
-        connections = self.adjacency_list.get(current_node, {})
-
-        if target_node not in connections:
-            # Penalty for attempting an invalid edge; agent stays in place
-            reward -= 50
+        
+        N = self.num_nodes
+        
+        if action >= N:
+            delete_idx = action - N
+            if delete_idx == 0 or delete_idx == self.destination_idx:
+                reward -= 50
+            else:
+                delete_node = self.idx_to_node[delete_idx]
+                if self.node_states.get(delete_node, 0) != 2:
+                    self.node_states[delete_node] = 2
+                    reward -= 5
+                else:
+                    reward -= 10
         else:
-            # Shaped reward: reward getting closer to destination, penalise regression
-            dist_before = self._bfs_distance(self.current_idx, self.destination_idx)
+            target_idx = action
+            current_node = self.idx_to_node[self.current_idx]
+            target_node = self.idx_to_node.get(target_idx, "Unknown")
+            
+            connections = self.adjacency_list.get(current_node, {})
 
-            travel_cost = connections[target_node]
-            reward -= travel_cost
-            self.current_idx = target_idx
+            if target_node not in connections:
+                reward -= 50
+            else:
+                t_status = self.node_states.get(target_node, 0)
+                if t_status == 2:
+                    reward -= 200
+                elif t_status == 1:
+                    reward -= 100
+                    
+                dist_before = self._bfs_distance(self.current_idx, self.destination_idx)
+                
+                travel_cost = connections[target_node]
+                reward -= travel_cost
+                self.current_idx = target_idx
 
-            dist_after = self._bfs_distance(self.current_idx, self.destination_idx)
-            if dist_after < dist_before:
-                reward += 15
-            elif dist_after > dist_before:
-                reward -= 5
+                dist_after = self._bfs_distance(self.current_idx, self.destination_idx)
+                if dist_after < dist_before:
+                    reward += 15
+                elif dist_after > dist_before:
+                    reward -= 5
 
-            # Massive structural penalty for routing into an active crisis node
-            if self.disruption_states.get(target_node, 0) == 1:
-                reward -= 100
-
-            # Success objective: reaching the final node ends the episode with a high reward
-            if target_idx == self.destination_idx:
-                reward += 500
-                terminated = True
+                if target_idx == self.destination_idx:
+                    reward += 500
+                    terminated = True
 
         return self._get_obs(), float(reward), terminated, truncated, self._get_info()

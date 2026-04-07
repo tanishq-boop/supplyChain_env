@@ -1,6 +1,5 @@
 import os
-import textwrap
-from typing import List, Optional
+from typing import List
 from openai import OpenAI
 from supply_chain_env import SupplyChainEnv
 
@@ -8,103 +7,109 @@ API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
 API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
 MODEL_NAME = os.getenv("MODEL_NAME", "meta-llama/Meta-Llama-3-8B-Instruct")
 TASK_NAME = "supply_chain_routing"
-BENCHMARK = "openenv_round1"
 
 MAX_STEPS = 15
 TEMPERATURE = 0.1
 MAX_TOKENS = 10
 
-SYSTEM_PROMPT = textwrap.dedent(
-    """
-    You are an autonomous supply chain routing AI. 
-    You must navigate a network of 5 cities:
-    0: Mumbai (Origin)
-    1: Surat
-    2: Ahmedabad
-    3: Jaipur
-    4: Delhi (Destination)
-    
-    Rules:
-    1. Your goal is to reach Node 4 (Delhi).
-    2. You will be provided your 'Current Node' and an array of 'Disruptions' (0=Clear, 1=Disrupted).
-    3. Moving into a disrupted node carries a massive -100 penalty. Avoid them at all costs.
-    4. You must reply with EXACTLY ONE INTEGER (0, 1, 2, 3, or 4) representing the node you want to travel to next. Do not output any other text or reasoning.
-    """
-).strip()
+def log_start(task_id: str, model: str) -> None:
+    print(f"[START] task_id={task_id} model={model}", flush=True)
 
-def log_start(task: str, env: str, model: str) -> None:
-    print(f"[START] task={task} env={env} model={model}", flush=True)
-
-def log_step(step: int, action: str, reward: float, done: bool, error: Optional[str]) -> None:
-    error_val = error if error else "null"
+def log_step(step: int, action: str, reward: float, done: bool) -> None:
     done_val = str(done).lower()
-    print(
-        f"[STEP] step={step} action={action} reward={reward:.2f} done={done_val} error={error_val}",
-        flush=True,
-    )
+    print(f"[STEP] step={step} action={action} reward={reward:.2f} done={done_val}", flush=True)
 
-def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> None:
-    rewards_str = ",".join(f"{r:.2f}" for r in rewards)
-    print(f"[END] success={str(success).lower()} steps={steps} score={score:.3f} rewards={rewards_str}", flush=True)
+def log_end(success: bool, steps: int, score: float) -> None:
+    print(f"[END] success={str(success).lower()} steps={steps} score={score:.2f}", flush=True)
 
-def get_model_action(client: OpenAI, step: int, obs: list) -> int:
-    current_node = obs[0]
-    disruptions = obs[1:]
+def get_model_action(client: OpenAI, step: int, obs: list, env: SupplyChainEnv) -> int:
+    current_idx = int(obs[0])
+    status_array = obs[1:]
     
-    user_prompt = f"Step: {step}\nCurrent Node: {current_node}\nDisruptions array (Index matches City ID): {disruptions}\nOutput your next node as a single integer."
+    N = env.num_nodes
+    current_node = env.idx_to_node[current_idx]
+    destination_idx = env.destination_idx
+    
+    connections = env.adjacency_list.get(current_node, {})
+    
+    valid_neighbors = []
+    for neighbor in connections.keys():
+        n_idx = env.node_to_idx[neighbor]
+        status = status_array[n_idx]
+        status_str = "Clear"
+        if status == 1:
+            status_str = "Disrupted"
+        elif status == 2:
+            status_str = "Deleted"
+        valid_neighbors.append({"Node ID": n_idx, "Status": status_str})
+    
+    system_prompt = (
+        "You are an autonomous supply chain routing AI.\n"
+        "Your goal is to reach the Target Node optimally.\n"
+        f"You must reply with EXACTLY ONE INTEGER representing your next action (0 to {2*N - 1}).\n"
+        "Do not output any other text or reasoning."
+    )
+    
+    user_prompt = f"Step: {step}\nCurrent Node ID: {current_idx}\nTarget Node ID: {destination_idx}\n"
+    user_prompt += "Immediate Neighbors of current node:\n"
+    for n in valid_neighbors:
+        user_prompt += f"- Node ID: {n['Node ID']} (Status: {n['Status']})\n"
+        
+    user_prompt += f"\nAction Space Rules:\n"
+    user_prompt += f"- To MOVE to a Node ID, output precisely that Node ID (0 to {N-1}). Moving to a Disrupted or Deleted node carries a massive penalty.\n"
+    user_prompt += f"- To DELETE node X, choose action {N}+X. You cannot delete Node 0 or Node {destination_idx}.\n"
+    
+    user_prompt += "\nOutput your chosen next action integer."
     
     try:
         completion = client.chat.completions.create(
             model=MODEL_NAME,
             messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
             temperature=TEMPERATURE,
             max_tokens=MAX_TOKENS,
         )
         text = (completion.choices[0].message.content or "").strip()
-        # Strictly extract the direct integer returned by the LLM for action alignment
         action = int(text)
         return action
     except Exception as exc:
-        # Fallback safety action in case of broken inference or non-integer hallucination
-        print(f"[DEBUG] Model request failed or failed to parse integer: {exc}", flush=True)
-        return 0
+        print(f"[DEBUG] Model inference failed: {exc}", flush=True)
+        return current_idx
 
 def main() -> None:
     client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
 
     baseline_graph = {
-        0: {1: 10},
+        0: {1: 10, 2: 15},
         1: {0: 10, 2: 12, 3: 20},
-        2: {1: 12, 3: 15, 4: 25},
+        2: {0: 15, 1: 12, 3: 15, 4: 25},
         3: {1: 20, 2: 15, 4: 10},
         4: {2: 25, 3: 10}
     }
-    baseline_disruptions = {0: 0, 1: 0, 2: 1, 3: 0, 4: 0}
+    baseline_node_states = {0: 0, 1: 0, 2: 1, 3: 0, 4: 0}
     
-    env = SupplyChainEnv(adjacency_list=baseline_graph, disruption_states=baseline_disruptions)
+    env = SupplyChainEnv(adjacency_list=baseline_graph, node_states=baseline_node_states)
 
     rewards: List[float] = []
     steps_taken = 0
     score = 0.0
     success = False
 
-    log_start(task=TASK_NAME, env=BENCHMARK, model=MODEL_NAME)
+    log_start(task_id=TASK_NAME, model=MODEL_NAME)
 
     try:
         obs, info = env.reset()
         
         for step in range(1, MAX_STEPS + 1):
-            action = get_model_action(client, step, obs.tolist())
+            action = get_model_action(client, step, obs.tolist(), env)
             obs, reward, terminated, truncated, info = env.step(action)
-            error = None
 
-            rewards.append(reward)
+            rewards.append(float(reward))
             steps_taken = step
 
-            log_step(step=step, action=str(action), reward=reward, done=terminated, error=error)
+            log_step(step=step, action=str(action), reward=reward, done=terminated)
 
             if terminated or truncated:
                 if terminated:
@@ -114,7 +119,7 @@ def main() -> None:
         score = sum(rewards)
 
     finally:
-        log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
+        log_end(success=success, steps=steps_taken, score=score)
 
 if __name__ == "__main__":
     main()
