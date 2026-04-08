@@ -1,4 +1,5 @@
 import os
+import argparse
 from typing import List
 from openai import OpenAI
 from supply_chain_env import SupplyChainEnv
@@ -24,13 +25,16 @@ def log_step(step: int, action: str, reward: float, info: dict, done: bool) -> N
 def log_end(success: bool, steps: int, score: float) -> None:
     print(f"[END] success={str(success).lower()} steps={steps} score={score:.2f}", flush=True)
 
-def get_model_action(client: OpenAI, step: int, obs: list, env: SupplyChainEnv) -> int:
+def get_model_action(client: OpenAI, step: int, obs: list, env: SupplyChainEnv, start_node: int, destination_node: int) -> int:
     current_idx = int(obs[0])
     status_array = obs[1:]
     
     N = len(env.adjacency_list)
     current_node = env.idx_to_node[current_idx]
-    destination_idx = N - 1
+    destination_idx = env.node_to_idx.get(destination_node, N - 1)
+    
+    start_name = env.idx_to_node.get(env.node_to_idx.get(start_node, 0), str(start_node))
+    destination_name = env.idx_to_node.get(destination_idx, str(destination_node))
     
     connections = env.adjacency_list.get(current_node, {})
     deleted_nodes = env.deleted_nodes
@@ -52,6 +56,7 @@ def get_model_action(client: OpenAI, step: int, obs: list, env: SupplyChainEnv) 
     
     system_prompt = (
         "You are an Autonomous Supply Chain Agent. You are evaluated on Safety and Efficiency. Every move consumes resources. Every Crisis node encountered is a critical failure. You have the authority to Delete high-risk nodes if the cost of the detour exceeds the cost of deletion (75 points). Act as a rational economic actor.\n"
+        f"MISSION BRIEF: Your current starting hub is {start_name}. You must navigate the network to reach the destination hub: {destination_name}.\n"
         f"You are at Node {current_idx}. Target is {destination_idx}. "
         f"To Move, pick 0 to {N-1}. To Delete a dangerous node, pick {N} to {2*N-1}.\n"
         "Do not output any other text or reasoning."
@@ -81,6 +86,11 @@ def get_model_action(client: OpenAI, step: int, obs: list, env: SupplyChainEnv) 
         return current_idx
 
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--start_node", type=int, default=0, help="Start node index/name")
+    parser.add_argument("--destination_node", type=int, default=4, help="Destination node index/name")
+    args = parser.parse_args()
+
     client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
 
     baseline_graph = {
@@ -102,10 +112,10 @@ def main() -> None:
     log_start(task_id=TASK_NAME, model=MODEL_NAME)
 
     try:
-        obs, info = env.reset()
+        obs, info = env.reset(options={"start_node": args.start_node, "destination_node": args.destination_node})
         
         for step in range(1, MAX_STEPS + 1):
-            action = get_model_action(client, step, obs.tolist(), env)
+            action = get_model_action(client, step, obs.tolist(), env, args.start_node, args.destination_node)
             obs, reward, terminated, truncated, info = env.step(action)
 
             rewards.append(float(reward))

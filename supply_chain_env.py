@@ -14,7 +14,7 @@ BASELINE_GRAPH = {
 class SupplyChainEnv(gym.Env):
     metadata = {"render_modes": ["console"]}
 
-    def __init__(self, adjacency_list=None, node_states=None, disruption_states=None):
+    def __init__(self, adjacency_list=None, node_states=None, disruption_states=None, start_node=None, destination_node=None):
         super().__init__()
         self.adjacency_list = adjacency_list or BASELINE_GRAPH
         self.nodes = list(self.adjacency_list.keys())
@@ -22,8 +22,8 @@ class SupplyChainEnv(gym.Env):
         self.node_to_idx = {node: i for i, node in enumerate(self.nodes)}
         self.idx_to_node = {i: node for i, node in enumerate(self.nodes)}
 
-        self.start_idx = 0
-        self.destination_idx = self.num_nodes - 1
+        self.start_idx = self.node_to_idx.get(start_node, 0) if start_node is not None else 0
+        self.destination_idx = self.node_to_idx.get(destination_node, self.num_nodes - 1) if destination_node is not None else self.num_nodes - 1
         
         # Handle both naming conventions for disruption state initialization
         if node_states is None and disruption_states is not None:
@@ -67,7 +67,10 @@ class SupplyChainEnv(gym.Env):
             else:
                 self.node_states = self.initial_node_states.copy()
             if 'start_node' in options:
-                self.current_idx = self.node_to_idx.get(options['start_node'], 0)
+                self.start_idx = self.node_to_idx.get(options['start_node'], self.start_idx)
+            if 'destination_node' in options:
+                self.destination_idx = self.node_to_idx.get(options['destination_node'], self.destination_idx)
+            self.current_idx = self.start_idx
         else:
             # Dynamic randomization to ensure varying scores for Scaler graders
             self.node_states = self.initial_node_states.copy()
@@ -96,22 +99,23 @@ class SupplyChainEnv(gym.Env):
 
     def step(self, action):
         action = int(action)
-        reward, time_penalty = 0.0, 5.0
+        reward = 0.0
         terminated = truncated = False
         N = self.num_nodes
+        d_before = self._bfs_distance(self.current_idx, self.destination_idx)
         
         # --- DELETION LOGIC ---
         if action >= N:
             delete_idx = action - N
             if delete_idx in [self.start_idx, self.destination_idx]:
-                reward -= 50 # Penalty for invalid deletion
+                reward -= 0.05 # Wasted deletion
             else:
                 node = self.idx_to_node[delete_idx]
                 if node not in self.deleted_nodes:
                     self.deleted_nodes.append(node)
-                    reward -= 75 # Cost of proactive safety (deletion)
+                    reward -= 0.075 # Strategic Deletion
                 else:
-                    reward -= 10
+                    reward -= 0.01 # Wasted deletion
         # --- MOVEMENT LOGIC ---
         else:
             target_idx = action
@@ -119,25 +123,31 @@ class SupplyChainEnv(gym.Env):
             edges = self.adjacency_list.get(curr_node, {})
 
             if target_node not in edges:
-                reward -= 50 # Penalty for invalid pathing
+                reward -= 0.05 # Invalid Move
             else:
                 t_status = 2 if target_node in self.deleted_nodes else self.node_states.get(target_node, 0)
-                if t_status == 2: reward -= 200 # Collision with deleted node
-                elif t_status == 1: reward -= 250 # Collision with disruption (high penalty)
+                if t_status == 2: 
+                    reward -= 0.20 # Deleted Node Collision
+                elif t_status == 1: 
+                    reward -= 0.25 # Crisis Collision
                 
-                # Potential-Based Reward Shaping
-                d_before = self._bfs_distance(self.current_idx, self.destination_idx)
                 cost = edges[target_node]
                 self.total_path_cost += cost
-                reward -= (cost + time_penalty)
+                
+                efficiency_penalty = (cost + 5.0) / 1000.0
+                reward -= efficiency_penalty
+                
                 self.current_idx = target_idx
 
                 d_after = self._bfs_distance(self.current_idx, self.destination_idx)
-                reward += 30 if d_after < d_before else -15 # Progress vs Backtracking
+                if d_after < d_before:
+                    reward += 0.10 # Progress Shaping
+                elif d_after > d_before:
+                    reward -= 0.10 # Backtracking
                 
                 if target_idx == self.destination_idx:
-                    reward += 1000 # Success Prize
+                    reward += 0.60 # Success Condition
                     terminated = True
 
-        self.last_step_reward = float(reward)
+        self.last_step_reward = float(np.clip(reward, -1.0, 1.0))
         return self._get_obs(), self.last_step_reward, terminated, truncated, self._get_info()

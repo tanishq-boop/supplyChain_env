@@ -49,6 +49,16 @@ st.divider()
 with st.sidebar:
     st.header("⚙️ Network Settings")
     
+    st.subheader("Route Mission")
+    start_hub = st.selectbox("Select Start Hub", st.session_state.nodes, index=0)
+    end_hub_idx = len(st.session_state.nodes) - 1 if st.session_state.nodes else 0
+    dest_hub = st.selectbox("Select Destination Hub", st.session_state.nodes, index=end_hub_idx)
+    
+    if start_hub == dest_hub:
+        st.error("Start and Destination cannot be the same.")
+        
+    st.divider()
+    
     with st.expander("➕ Add New Transit Hub", expanded=False):
         new_node = st.text_input("Hub Name")
         if st.button("Add Hub") and new_node:
@@ -132,12 +142,15 @@ with col_graph:
         agraph(nodes=visual_nodes, edges=visual_edges, config=graph_config)
 
 if run_simulation:
-    with col_logs:
-        st.subheader("🤖 Simulation Logs")
-        
-        env.preserve_deletions = True
-        obs, info = env.reset()
-        env.preserve_deletions = False
+    if start_hub == dest_hub:
+        st.error("Cannot run simulation. Start and destination hubs must be different.")
+    else:
+        with col_logs:
+            st.subheader("🤖 Simulation Logs")
+            
+            env.preserve_deletions = True
+            obs, info = env.reset(options={"start_node": start_hub, "destination_node": dest_hub})
+            env.preserve_deletions = False
         
         total_reward = 0.0
         terminated = False

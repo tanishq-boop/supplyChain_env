@@ -1,6 +1,7 @@
 import uvicorn
 from fastapi import FastAPI
 from pydantic import BaseModel
+from typing import Optional
 from supply_chain_env import SupplyChainEnv
 
 app = FastAPI(title="Supply Chain Optimizer API")
@@ -18,6 +19,10 @@ baseline_states = {0: 0, 1: 0, 2: 1, 3: 0, 4: 0}
 
 env = SupplyChainEnv(adjacency_list=baseline_graph, node_states=baseline_states)
 
+class ResetRequest(BaseModel):
+    start_node: Optional[int] = None
+    destination_node: Optional[int] = None
+
 class StepPayload(BaseModel):
     action: int
 
@@ -25,8 +30,19 @@ class StepPayload(BaseModel):
 def home():
     return {"status": "ready", "message": "Supply Chain API is live"}
 
-@app.api_route("/reset", methods=["GET", "POST"])
-def reset_env():
+@app.post("/reset")
+def reset_env(request: ResetRequest):
+    options = {}
+    if request.start_node is not None:
+        options["start_node"] = request.start_node
+    if request.destination_node is not None:
+        options["destination_node"] = request.destination_node
+    
+    obs, info = env.reset(options=options if options else None)
+    return {"observation": obs.tolist(), "status": "reset_success"}
+
+@app.get("/reset")
+def reset_env_get():
     obs, info = env.reset()
     return {"observation": obs.tolist(), "status": "reset_success"}
 
