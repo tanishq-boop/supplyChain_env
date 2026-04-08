@@ -4,7 +4,7 @@ from typing import List
 from openai import OpenAI
 from supply_chain_env import SupplyChainEnv
 
-API_KEY = os.environ.get("OPENAI_API_KEY")
+API_KEY = os.environ.get("OPENAI_API_KEY", "EMPTY_KEY") 
 API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
 MODEL_NAME = os.getenv("MODEL_NAME", "meta-llama/Meta-Llama-3-8B-Instruct")
 TASK_NAME = "supply_chain_routing"
@@ -23,7 +23,8 @@ def log_step(step: int, action: str, reward: float, info: dict, done: bool) -> N
     print(f"[STEP] step={step} action={action} reward={reward:.2f} step_reward={step_rew:.2f} total_path_cost={total_cost:.2f} done={done_val}", flush=True)
 
 def log_end(success: bool, steps: int, score: float) -> None:
-    print(f"[END] success={str(success).lower()} steps={steps} score={score:.2f}", flush=True)
+    final_score = max(0.01, min(0.99, score))
+    print(f"[END] success={str(success).lower()} steps={steps} score={final_score:.2f}", flush=True)
 
 def get_model_action(client: OpenAI, step: int, obs: list, env: SupplyChainEnv, start_node: int, destination_node: int) -> int:
     current_idx = int(obs[0])
@@ -42,16 +43,11 @@ def get_model_action(client: OpenAI, step: int, obs: list, env: SupplyChainEnv, 
     valid_neighbors = []
     for neighbor in connections.keys():
         n_idx = env.node_to_idx[neighbor]
-        
-        # Discovery Constraint: Only append neighbors NOT in deleted_nodes
         if neighbor in deleted_nodes:
             continue
             
         status = status_array[n_idx]
-        status_str = "Clear"
-        if status == 1:
-            status_str = "Disrupted"
-            
+        status_str = "Clear" if status == 0 else "Disrupted"
         valid_neighbors.append({"Node ID": n_idx, "Status": status_str})
     
     system_prompt = (
@@ -65,10 +61,12 @@ def get_model_action(client: OpenAI, step: int, obs: list, env: SupplyChainEnv, 
     user_prompt = f"Step: {step}\nAvailable Active Neighbors:\n"
     for n in valid_neighbors:
         user_prompt += f"- Node ID: {n['Node ID']} (Status: {n['Status']})\n"
-        
     user_prompt += "\nOutput your chosen next action integer."
     
     try:
+        if client.api_key == "EMPTY_KEY":
+             return current_idx
+
         completion = client.chat.completions.create(
             model=MODEL_NAME,
             messages=[
@@ -79,8 +77,7 @@ def get_model_action(client: OpenAI, step: int, obs: list, env: SupplyChainEnv, 
             max_tokens=MAX_TOKENS,
         )
         text = (completion.choices[0].message.content or "").strip()
-        action = int(text)
-        return action
+        return int(text)
     except Exception as exc:
         print(f"[DEBUG] Model inference failed: {exc}", flush=True)
         return current_idx
@@ -120,7 +117,6 @@ def main() -> None:
 
             rewards.append(float(reward))
             steps_taken = step
-
             log_step(step=step, action=str(action), reward=reward, info=info, done=terminated)
 
             if terminated or truncated:
@@ -128,7 +124,8 @@ def main() -> None:
                     success = True
                 break
 
-        score = sum(rewards)
+        total_raw_reward = sum(rewards)
+        score = total_raw_reward / 100.0 
 
     finally:
         log_end(success=success, steps=steps_taken, score=score)
