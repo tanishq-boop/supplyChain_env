@@ -3,10 +3,15 @@ version: "1.0.0"
 tasks:
   - id: "task_1_easy"
     description: "Navigate to the destination with a clear path."
+    grader: "programmatic"
     options: {"start_node": 0, "destination_node": 4, "node_states": {}}
+    
   - id: "task_2_medium"
     description: "Navigate to the destination managing a random disruption."
+    grader: "programmatic"
     options: {"start_node": 0, "destination_node": 4} 
+    
   - id: "task_3_hard"
     description: "Navigate through multiple targeted disruptions requiring strategic node deletion."
+    grader: "programmatic"
     options: {"start_node": 0, "destination_node": 4, "node_states": {1: 1, 2: 1}}

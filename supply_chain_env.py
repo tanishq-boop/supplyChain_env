@@ -133,9 +133,9 @@ class SupplyChainEnv(gym.Env):
             else:
                 t_status = 2 if target_node in self.deleted_nodes else self.node_states.get(target_node, 0)
                 if t_status == 2: 
-                    reward -= 0.20 # Deleted Node Collision
+                    reward -= 0.20 
                 elif t_status == 1: 
-                    reward -= 0.25 # Crisis Collision
+                    reward -= 0.25 
                 
                 cost = edges[target_node]
                 self.total_path_cost += cost
@@ -152,8 +152,9 @@ class SupplyChainEnv(gym.Env):
                     reward -= 0.10 # Backtracking
                 
                 if target_idx == self.destination_idx:
-                    reward += 0.60 # Success Condition
+                    reward += 0.50 # Success Condition
                     terminated = True
 
-        self.last_step_reward = float(np.clip(reward, -1.0, 1.0))
+        reward += 0.01
+        self.last_step_reward = float(np.clip(reward, 0.01, 0.99))
         return self._get_obs(), self.last_step_reward, terminated, truncated, self._get_info()
