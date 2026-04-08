@@ -1,17 +1,26 @@
+"""
+Supply Chain AI Agent Inference Logic.
+
+This module executes automated agent evaluations using OpenAI's wrapper for the LLM API. 
+It initializes tasks dynamically, formats observation state strings into prompts, 
+parses natural language intent into integer actions, and logs structured telemetry 
+for validation graders.
+"""
+
 import os
 import re
 from typing import List
 from openai import OpenAI
 from supply_chain_env import SupplyChainEnv
 
-# --- RULE: Exact Validator Environment Variables ---
+# Validated endpoint configurations for LiteLLM proxy injections
 API_KEY = os.environ.get("API_KEY") 
 API_BASE_URL = os.environ.get("API_BASE_URL", "https://router.huggingface.co/v1")
 MODEL_NAME = os.environ.get("MODEL_NAME") or "meta-llama/Meta-Llama-3-8B-Instruct"
 ENV_NAME = "supply_chain"
 
 MAX_STEPS = 15
-TEMPERATURE = 0.0 # Standardize for validation
+TEMPERATURE = 0.0
 MAX_TOKENS = 10
 
 TASKS = [
@@ -21,6 +30,20 @@ TASKS = [
 ]
 
 def get_model_action(client: OpenAI, step: int, obs: list, env: SupplyChainEnv, start_node: int, destination_node: int) -> int:
+    """
+    Prompts the LLM agent to select an optimal move based on local graph observations.
+
+    Args:
+        client: The initialized OpenAI client instance.
+        step: Current environment step counter.
+        obs: Observation vector describing positions and node statuses.
+        env: SupplyChainEnv instance providing topology context.
+        start_node: Origin hub configuration.
+        destination_node: Target hub configuration.
+
+    Returns:
+        int: The selected graph action or deletion maneuver. 
+    """
     current_idx = int(obs[0])
     status_array = obs[1:]
     
@@ -43,7 +66,6 @@ def get_model_action(client: OpenAI, step: int, obs: list, env: SupplyChainEnv, 
     user_prompt = f"Step: {step}. Current Node: {current_idx}. Neighbors: {', '.join(valid_neighbors)}."
     
     try:
-        # Check for presence of API key to avoid crash
         if not client.api_key or client.api_key == "EMPTY_KEY":
             return current_idx
 
@@ -58,8 +80,7 @@ def get_model_action(client: OpenAI, step: int, obs: list, env: SupplyChainEnv, 
         )
         text = (completion.choices[0].message.content or "").strip()
         
-        # --- FIX: Robust Regex Parsing ---
-        # Models often output "Action: 4" or "4." - this extracts just the number.
+        # Robustly extract the integer choice irrespective of conversational artifacts
         match = re.search(r'\d+', text)
         if match:
             return int(match.group())
@@ -69,7 +90,8 @@ def get_model_action(client: OpenAI, step: int, obs: list, env: SupplyChainEnv, 
         return current_idx
 
 def main() -> None:
-    # Initialize client exactly as validator expects
+    """Entrypoint for automated sequential task evaluation workflow."""
+    
     client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
 
     baseline_graph = {
@@ -102,7 +124,6 @@ def main() -> None:
                 rewards.append(float(reward))
                 steps_taken = step
                 
-                # RULE: Exact [STEP] format with lowercase 'true'/'false'
                 done_str = "true" if (terminated or truncated) else "false"
                 print(f"[STEP] step={step} action={action} reward={reward:.2f} done={done_str} error=null", flush=True)
 
@@ -110,7 +131,6 @@ def main() -> None:
                     success = bool(terminated)
                     break
 
-            # RULE: Clamp score strictly between 0.001 and 0.999
             total_raw_reward = sum(rewards)
             raw_score = total_raw_reward / 100.0 
             score = max(0.001, min(0.999, raw_score))
@@ -120,7 +140,6 @@ def main() -> None:
             score = 0.001
             
         finally:
-            # RULE: [END] must always be emitted with exact string keys
             rewards_str = ",".join(f"{r:.2f}" for r in rewards)
             success_str = "true" if success else "false"
             print(f"[END] task={task_id} success={success_str} steps={steps_taken} score={score:.3f} rewards={rewards_str}", flush=True)

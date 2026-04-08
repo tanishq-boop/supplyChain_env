@@ -1,3 +1,11 @@
+"""
+Supply Chain FastAPI Backend Service.
+
+This module exposes the Supply Chain Gymnasium environment over a RESTful API.
+It utilizes Pydantic for strict schema validation, ensuring seamless integration
+with the Meta OpenEnv validation wrappers and decoupled inference clients.
+"""
+
 import uvicorn
 from fastapi import FastAPI
 from pydantic import BaseModel
@@ -6,7 +14,7 @@ from supply_chain_env import SupplyChainEnv
 
 app = FastAPI(title="Supply Chain Optimizer API")
 
-# Ensure these match your supply_chain_env.py logic
+# Default validation topology if no dynamic graph is injected
 baseline_graph = {
     0: {1: 10},
     1: {0: 10, 2: 12, 3: 20},
@@ -14,7 +22,6 @@ baseline_graph = {
     3: {1: 20, 2: 15, 4: 10},
     4: {2: 25, 3: 10}
 }
-# Using 0=Clear, 1=Disrupted, 2=Deleted logic
 baseline_states = {0: 0, 1: 0, 2: 1, 3: 0, 4: 0}
 
 env = SupplyChainEnv(adjacency_list=baseline_graph, node_states=baseline_states)
@@ -42,6 +49,7 @@ def home():
 
 @app.post("/reset", response_model=ObservationResponse)
 async def reset(request: Optional[ResetRequest] = None):
+    """Resets the environment and returns the initial observation state."""
     opts = request.options if (request and request.options) else {}
     obs, info = env.reset(options=opts)
     return ObservationResponse(
@@ -54,6 +62,7 @@ async def reset(request: Optional[ResetRequest] = None):
 
 @app.post("/step", response_model=ObservationResponse)
 def step_env(request: ActionRequest):
+    """Executes an action in the environment and returns the resulting state payload."""
     obs, reward, terminated, truncated, info = env.step(request.action)
     return ObservationResponse(
         observation=obs.tolist(),

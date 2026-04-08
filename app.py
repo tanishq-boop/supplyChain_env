@@ -8,6 +8,11 @@ Optimization environment. It provides real-time topology configuration, interact
 """
 
 import streamlit as st
+
+# Handle Meta OpenEnv Hackathon standard Status Check natively
+if st.query_params.get("status") == "true":
+    st.json({"status": "ready", "message": "Supply Chain API is live"})
+    st.stop()
 import streamlit.components.v1 as components
 import json
 import time
