@@ -1,30 +1,24 @@
 import os
-import argparse
+import re
 from typing import List
 from openai import OpenAI
 from supply_chain_env import SupplyChainEnv
 
-API_KEY = os.environ.get("OPENAI_API_KEY", "EMPTY_KEY") 
-API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
-MODEL_NAME = os.getenv("MODEL_NAME", "meta-llama/Meta-Llama-3-8B-Instruct")
-TASK_NAME = "supply_chain_routing"
+# --- RULE: Exact Validator Environment Variables ---
+API_KEY = os.environ.get("API_KEY") 
+API_BASE_URL = os.environ.get("API_BASE_URL", "https://router.huggingface.co/v1")
+MODEL_NAME = os.environ.get("MODEL_NAME") or "meta-llama/Meta-Llama-3-8B-Instruct"
+ENV_NAME = "supply_chain"
 
 MAX_STEPS = 15
-TEMPERATURE = 0.1
+TEMPERATURE = 0.0 # Standardize for validation
 MAX_TOKENS = 10
 
-def log_start(task_id: str, model: str) -> None:
-    print(f"[START] task_id={task_id} model={model}", flush=True)
-
-def log_step(step: int, action: str, reward: float, info: dict, done: bool) -> None:
-    done_val = str(done).lower()
-    step_rew = info.get("step_reward", 0.0)
-    total_cost = info.get("total_path_cost", 0.0)
-    print(f"[STEP] step={step} action={action} reward={reward:.2f} step_reward={step_rew:.2f} total_path_cost={total_cost:.2f} done={done_val}", flush=True)
-
-def log_end(success: bool, steps: int, score: float) -> None:
-    final_score = max(0.01, min(0.99, score))
-    print(f"[END] success={str(success).lower()} steps={steps} score={final_score:.2f}", flush=True)
+TASKS = [
+    ("task_1_easy", {"start_node": 0, "destination_node": 4, "node_states": {}}),
+    ("task_2_medium", {"start_node": 0, "destination_node": 4, "node_states": {2: 1}}),
+    ("task_3_hard", {"start_node": 0, "destination_node": 4, "node_states": {1: 1, 2: 1}}),
+]
 
 def get_model_action(client: OpenAI, step: int, obs: list, env: SupplyChainEnv, start_node: int, destination_node: int) -> int:
     current_idx = int(obs[0])
@@ -32,40 +26,26 @@ def get_model_action(client: OpenAI, step: int, obs: list, env: SupplyChainEnv, 
     
     N = len(env.adjacency_list)
     current_node = env.idx_to_node[current_idx]
-    destination_idx = env.node_to_idx.get(destination_node, N - 1)
-    
-    start_name = env.idx_to_node.get(env.node_to_idx.get(start_node, 0), str(start_node))
-    destination_name = env.idx_to_node.get(destination_idx, str(destination_node))
-    
-    connections = env.adjacency_list.get(current_node, {})
-    deleted_nodes = env.deleted_nodes
     
     valid_neighbors = []
+    connections = env.adjacency_list.get(current_node, {})
     for neighbor in connections.keys():
         n_idx = env.node_to_idx[neighbor]
-        if neighbor in deleted_nodes:
+        if neighbor in env.deleted_nodes:
             continue
-            
-        status = status_array[n_idx]
-        status_str = "Clear" if status == 0 else "Disrupted"
-        valid_neighbors.append({"Node ID": n_idx, "Status": status_str})
-    
+        status_str = "Clear" if status_array[n_idx] == 0 else "Disrupted"
+        valid_neighbors.append(f"Node {n_idx} ({status_str})")
+
     system_prompt = (
-        "You are an Autonomous Supply Chain Agent. You are evaluated on Safety and Efficiency. Every move consumes resources. Every Crisis node encountered is a critical failure. You have the authority to Delete high-risk nodes if the cost of the detour exceeds the cost of deletion (75 points). Act as a rational economic actor.\n"
-        f"MISSION BRIEF: Your current starting hub is {start_name}. You must navigate the network to reach the destination hub: {destination_name}.\n"
-        f"You are at Node {current_idx}. Target is {destination_idx}. "
-        f"To Move, pick 0 to {N-1}. To Delete a dangerous node, pick {N} to {2*N-1}.\n"
-        "Do not output any other text or reasoning."
+        "You are an Autonomous Supply Chain Agent. Output ONLY the integer ID of your next action.\n"
+        f"Goal: Reach Node {env.node_to_idx.get(destination_node, N-1)}."
     )
-    
-    user_prompt = f"Step: {step}\nAvailable Active Neighbors:\n"
-    for n in valid_neighbors:
-        user_prompt += f"- Node ID: {n['Node ID']} (Status: {n['Status']})\n"
-    user_prompt += "\nOutput your chosen next action integer."
+    user_prompt = f"Step: {step}. Current Node: {current_idx}. Neighbors: {', '.join(valid_neighbors)}."
     
     try:
-        if client.api_key == "EMPTY_KEY":
-             return current_idx
+        # Check for presence of API key to avoid crash
+        if not client.api_key or client.api_key == "EMPTY_KEY":
+            return current_idx
 
         completion = client.chat.completions.create(
             model=MODEL_NAME,
@@ -77,17 +57,19 @@ def get_model_action(client: OpenAI, step: int, obs: list, env: SupplyChainEnv, 
             max_tokens=MAX_TOKENS,
         )
         text = (completion.choices[0].message.content or "").strip()
-        return int(text)
+        
+        # --- FIX: Robust Regex Parsing ---
+        # Models often output "Action: 4" or "4." - this extracts just the number.
+        match = re.search(r'\d+', text)
+        if match:
+            return int(match.group())
+        return current_idx
     except Exception as exc:
         print(f"[DEBUG] Model inference failed: {exc}", flush=True)
         return current_idx
 
 def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--start_node", type=int, default=0, help="Start node index/name")
-    parser.add_argument("--destination_node", type=int, default=4, help="Destination node index/name")
-    args = parser.parse_args()
-
+    # Initialize client exactly as validator expects
     client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
 
     baseline_graph = {
@@ -97,38 +79,51 @@ def main() -> None:
         3: {1: 20, 2: 15, 4: 10},
         4: {2: 25, 3: 10}
     }
-    baseline_node_states = {0: 0, 1: 0, 2: 1, 3: 0, 4: 0}
     
-    env = SupplyChainEnv(adjacency_list=baseline_graph, node_states=baseline_node_states)
-
-    rewards: List[float] = []
-    steps_taken = 0
-    score = 0.0
-    success = False
-
-    log_start(task_id=TASK_NAME, model=MODEL_NAME)
-
-    try:
-        obs, info = env.reset(options={"start_node": args.start_node, "destination_node": args.destination_node})
+    for task_id, options in TASKS:
+        rewards: List[float] = []
+        steps_taken = 0
+        success = False
+        score = 0.001 # Initialize with non-zero floor
         
-        for step in range(1, MAX_STEPS + 1):
-            action = get_model_action(client, step, obs.tolist(), env, args.start_node, args.destination_node)
-            obs, reward, terminated, truncated, info = env.step(action)
+        node_states = options.get("node_states", {})
+        env = SupplyChainEnv(adjacency_list=baseline_graph, node_states=node_states)
 
-            rewards.append(float(reward))
-            steps_taken = step
-            log_step(step=step, action=str(action), reward=reward, info=info, done=terminated)
+        # RULE: One [START] per task in the loop
+        print(f"[START] task={task_id} env={ENV_NAME} model={MODEL_NAME}", flush=True)
 
-            if terminated or truncated:
-                if terminated:
-                    success = True
-                break
+        try:
+            obs, info = env.reset(options=options)
+            
+            for step in range(1, MAX_STEPS + 1):
+                action = get_model_action(client, step, obs.tolist(), env, options["start_node"], options["destination_node"])
+                obs, reward, terminated, truncated, info = env.step(action)
 
-        total_raw_reward = sum(rewards)
-        score = total_raw_reward / 100.0 
+                rewards.append(float(reward))
+                steps_taken = step
+                
+                # RULE: Exact [STEP] format with lowercase 'true'/'false'
+                done_str = "true" if (terminated or truncated) else "false"
+                print(f"[STEP] step={step} action={action} reward={reward:.2f} done={done_str} error=null", flush=True)
 
-    finally:
-        log_end(success=success, steps=steps_taken, score=score)
+                if terminated or truncated:
+                    success = bool(terminated)
+                    break
+
+            # RULE: Clamp score strictly between 0.001 and 0.999
+            total_raw_reward = sum(rewards)
+            raw_score = total_raw_reward / 100.0 
+            score = max(0.001, min(0.999, raw_score))
+
+        except Exception as e:
+            print(f"[DEBUG] {task_id} error: {e}", flush=True)
+            score = 0.001
+            
+        finally:
+            # RULE: [END] must always be emitted with exact string keys
+            rewards_str = ",".join(f"{r:.2f}" for r in rewards)
+            success_str = "true" if success else "false"
+            print(f"[END] task={task_id} success={success_str} steps={steps_taken} score={score:.3f} rewards={rewards_str}", flush=True)
 
 if __name__ == "__main__":
     main()
