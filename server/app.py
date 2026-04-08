@@ -1,7 +1,7 @@
 import uvicorn
 from fastapi import FastAPI
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List, Dict, Any
 from supply_chain_env import SupplyChainEnv
 
 app = FastAPI(title="Supply Chain Optimizer API")
@@ -20,41 +20,55 @@ baseline_states = {0: 0, 1: 0, 2: 1, 3: 0, 4: 0}
 env = SupplyChainEnv(adjacency_list=baseline_graph, node_states=baseline_states)
 
 class ResetRequest(BaseModel):
-    start_node: Optional[int] = None
-    destination_node: Optional[int] = None
+    options: Optional[Dict[str, Any]] = None
 
-class StepPayload(BaseModel):
+class ActionRequest(BaseModel):
     action: int
+
+class ObservationResponse(BaseModel):
+    observation: List[int]
+    reward: float
+    terminated: bool
+    truncated: bool
+    info: Dict[str, Any]
+
+class StateResponse(BaseModel):
+    observation: List[int]
+    info: Dict[str, Any]
 
 @app.get("/")
 def home():
     return {"status": "ready", "message": "Supply Chain API is live"}
 
-@app.post("/reset")
+@app.post("/reset", response_model=ObservationResponse)
 def reset_env(request: ResetRequest):
-    options = {}
-    if request.start_node is not None:
-        options["start_node"] = request.start_node
-    if request.destination_node is not None:
-        options["destination_node"] = request.destination_node
-    
-    obs, info = env.reset(options=options if options else None)
-    return {"observation": obs.tolist(), "status": "reset_success"}
+    obs, info = env.reset(options=request.options)
+    return ObservationResponse(
+        observation=obs.tolist(),
+        reward=0.0,
+        terminated=False,
+        truncated=False,
+        info=info
+    )
 
-@app.get("/reset")
-def reset_env_get():
-    obs, info = env.reset()
-    return {"observation": obs.tolist(), "status": "reset_success"}
+@app.post("/step", response_model=ObservationResponse)
+def step_env(request: ActionRequest):
+    obs, reward, terminated, truncated, info = env.step(request.action)
+    return ObservationResponse(
+        observation=obs.tolist(),
+        reward=float(reward),
+        terminated=bool(terminated),
+        truncated=bool(truncated),
+        info=info
+    )
 
-@app.post("/step")
-def step_env(payload: StepPayload):
-    obs, reward, terminated, truncated, info = env.step(payload.action)
-    return {
-        "observation": obs.tolist(),
-        "reward": float(reward),
-        "terminated": bool(terminated),
-        "truncated": bool(truncated)
-    }
+@app.get("/state", response_model=StateResponse)
+def state_env():
+    state_data = env.state()
+    return StateResponse(
+        observation=state_data["observation"],
+        info=state_data["info"]
+    )
 
 @app.get("/health")
 def health():

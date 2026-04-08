@@ -1,29 +1,12 @@
-name: "supply-chain-optimizer"
+name: "Supply Chain Resilience"
 version: "1.0.0"
-entry_point: "supply_chain_env:SupplyChainEnv"
-
-description: >
-  A real-world logistics simulation where an agent must navigate a 
-  hub-and-spoke network while responding to real-time disruptions (crises).
-  The goal is to deliver cargo from a source to a destination with 
-  minimum cost and maximum reliability.
-
 tasks:
-  - id: "easy-clear-path"
-    description: "Navigate a 3-node network with no active disruptions. Tests basic routing."
-    difficulty: "easy"
-    goal: "Reach destination in < 5 steps with reward > 0.8"
-    
-  - id: "medium-dynamic-reroute"
-    description: "The primary hub is disrupted halfway through. Agent must find an alternate path."
-    difficulty: "medium"
-    goal: "Reach destination despite active node failure with reward > 0.5"
-
-  - id: "hard-crisis-management"
-    description: "Large network with multiple simultaneous disruptions. Requires complex long-term planning."
-    difficulty: "hard"
-    goal: "Reach destination using the only surviving path with reward > 0.2"
-
-metadata:
-  runtime: "python3.10"
-  tags: ["logistics", "supply-chain", "optimization", "resiliency"]
+  - id: "task_1_easy"
+    description: "Navigate to the destination with a clear path."
+    options: {"start_node": 0, "destination_node": 4, "node_states": {}}
+  - id: "task_2_medium"
+    description: "Navigate to the destination managing a random disruption."
+    options: {"start_node": 0, "destination_node": 4} 
+  - id: "task_3_hard"
+    description: "Navigate through multiple targeted disruptions requiring strategic node deletion."
+    options: {"start_node": 0, "destination_node": 4, "node_states": {1: 1, 2: 1}}

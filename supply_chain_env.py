@@ -97,6 +97,12 @@ class SupplyChainEnv(gym.Env):
             "total_path_cost": self.total_path_cost
         }
 
+    def state(self):
+        return {
+            "observation": self._get_obs().tolist(),
+            "info": self._get_info()
+        }
+
     def step(self, action):
         action = int(action)
         reward = 0.0

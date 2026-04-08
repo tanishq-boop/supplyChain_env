@@ -4,7 +4,7 @@ from typing import List
 from openai import OpenAI
 from supply_chain_env import SupplyChainEnv
 
-API_KEY = os.getenv("HF_TOKEN") or os.getenv("API_KEY")
+API_KEY = os.environ.get("OPENAI_API_KEY")
 API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
 MODEL_NAME = os.getenv("MODEL_NAME", "meta-llama/Meta-Llama-3-8B-Instruct")
 TASK_NAME = "supply_chain_routing"
