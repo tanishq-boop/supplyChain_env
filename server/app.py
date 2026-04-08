@@ -20,7 +20,7 @@ baseline_states = {0: 0, 1: 0, 2: 1, 3: 0, 4: 0}
 env = SupplyChainEnv(adjacency_list=baseline_graph, node_states=baseline_states)
 
 class ResetRequest(BaseModel):
-    options: Optional[Dict[str, Any]] = None
+    options: Optional[dict] = None
 
 class ActionRequest(BaseModel):
     action: int
@@ -41,8 +41,9 @@ def home():
     return {"status": "ready", "message": "Supply Chain API is live"}
 
 @app.post("/reset", response_model=ObservationResponse)
-def reset_env(request: ResetRequest):
-    obs, info = env.reset(options=request.options)
+async def reset(request: Optional[ResetRequest] = None):
+    opts = request.options if (request and request.options) else {}
+    obs, info = env.reset(options=opts)
     return ObservationResponse(
         observation=obs.tolist(),
         reward=0.0,
